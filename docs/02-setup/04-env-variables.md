@@ -1,3 +1,7 @@
+---
+title: Environment Variables
+---
+
 # Environment Variables Reference
 
 Environment variables configure your Frappe Docker setup. They can be set directly in the container or defined in a `.env` file referenced by Docker Compose.
@@ -136,3 +140,11 @@ Use these variables when running behind a reverse proxy or load balancer:
 | `UPSTREAM_REAL_IP_ADDRESS`   | Trusted upstream IP address for real IP detection | `127.0.0.1`       |
 | `UPSTREAM_REAL_IP_HEADER`    | Request header containing client IP               | `X-Forwarded-For` |
 | `UPSTREAM_REAL_IP_RECURSIVE` | Enable recursive IP search                        | `off`             |
+
+---
+
+## Migration Service
+
+| Variable        | Purpose                         | Default                    | Allowed Values   |
+| --------------- | ------------------------------- | -------------------------- | ---------------- |
+| `MIGRATE_SITES` | Switch auto migration on or off | `true` - auto migration on | `true` , `false` |
