@@ -60,34 +60,26 @@ jobs:
       - name: Generate apps.json
         env:
           APPS_PAT: ${{ secrets.APPS_PAT }}
-          REF_NAME: ${{ github.ref_name }}
         run: |
-          python3 - <<'PY'
-          import json, os
+          CUSTOM_BRANCH=$([[ "${{ github.ref_name }}" == "develop" ]] && echo "develop" || echo "main")
 
-          ref = os.environ["REF_NAME"]
-          pat = os.environ.get("APPS_PAT", "")
+          if [ -n "$APPS_PAT" ]; then
+            PREFIX="https://${APPS_PAT}@github.com/TIVOK-SOLUTIONS"
+          else
+            PREFIX="https://github.com/TIVOK-SOLUTIONS"
+          fi
 
-          custom_branch = "develop" if ref == "develop" else "main"
-
-          prefix = (
-              f"https://{pat}@github.com/TIVOK-SOLUTIONS"
-              if pat
-              else "https://github.com/TIVOK-SOLUTIONS"
-          )
-
-          apps = [
-              {"url": "https://github.com/frappe/erpnext",      "branch": "version-16"},
-              {"url": "https://github.com/frappe/hrms",          "branch": "version-16"},
-              {"url": f"{prefix}/ipstc.git",                     "branch": custom_branch},
-              {"url": f"{prefix}/ipstc-hrms.git",                "branch": custom_branch},
+          cat > /tmp/apps.json <<EOF
+          [
+            {"url": "https://github.com/frappe/erpnext",    "branch": "version-16"},
+            {"url": "https://github.com/frappe/hrms",        "branch": "version-16"},
+            {"url": "${PREFIX}/ipstc.git",                   "branch": "${CUSTOM_BRANCH}"},
+            {"url": "${PREFIX}/ipstc-hrms.git",              "branch": "${CUSTOM_BRANCH}"}
           ]
+          EOF
 
-          with open("/tmp/apps.json", "w") as f:
-              json.dump(apps, f, indent=2)
-
-          print(f"Built apps.json: custom apps on branch '{custom_branch}'")
-          PY
+          echo "apps.json written (custom apps on branch: ${CUSTOM_BRANCH})"
+          echo "size: $(wc -c < /tmp/apps.json) bytes"
 
       - name: Build and push
         uses: docker/build-push-action@v5
@@ -101,6 +93,7 @@ jobs:
           build-args: |
             FRAPPE_BRANCH=version-16
             FRAPPE_PATH=https://github.com/frappe/frappe
+            CACHE_BUST=${{ github.ref_name }}-${{ hashFiles('apps.json') }}
           secrets: |
             id=apps_json,src=/tmp/apps.json
           cache-from: type=gha
