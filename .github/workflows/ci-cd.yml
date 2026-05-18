@@ -156,4 +156,5 @@ jobs:
               -f overrides/compose.redis.yaml \
               -f overrides/compose.noproxy.yaml \
               up -d --remove-orphans
+            until docker compose exec -T db mariadb-admin ping -h localhost --silent; do sleep 2; done
             docker compose exec -T backend bench --site ${{ secrets.SITE_NAME }} migrate
