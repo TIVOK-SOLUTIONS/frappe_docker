@@ -1,6 +1,6 @@
 # CI/CD Pipeline — Custom Frappe Image
 
-sThis documents the GitHub Actions pipeline that builds and publishes the
+This documents the GitHub Actions pipeline that builds and publishes the
 custom Frappe v16 image containing **erpnext**, **hrms**, **ipstc**, and
 **ipstc_hrms**.
 
@@ -183,8 +183,56 @@ pulls the latest commit on the matching branch at build time.
 
 ---
 
-## Secrets summary
+## Secrets & credentials summary
 
-| Secret | Scope | Purpose |
+### GitHub Actions secret
+Set at **Settings → Secrets and variables → Actions**
+
+| Secret | Type | Permissions needed | Purpose |
+|---|---|---|---|
+| `APPS_PAT` | Fine-grained PAT | `TIVOK-SOLUTIONS/ipstc` + `ipstc-hrms` → Contents: Read-only | Clones private app repos during the Docker build. Injected via BuildKit secret — never baked into the image. |
+
+---
+
+### Server credentials
+Configured directly on each server — not stored in GitHub.
+
+#### 1. GHCR pull token
+Allows the server to pull the built image from GHCR.
+
+- **Type**: Classic PAT, `read:packages` scope
+- **Stored at**: `~/.docker/config.json` (written automatically by `docker login`)
+- **How to create**:
+  1. Go to **GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)**
+  2. Select only the `read:packages` scope
+  3. Run on each server:
+  ```bash
+  echo "<token>" | docker login ghcr.io -u <your-github-username> --password-stdin
+  ```
+
+#### 2. `.env` file
+- **Path**: `/opt/frappe-docker/.env`
+- **Created from**: `cp example.env .env`
+
+Required variables:
+
+| Variable | Example | Description |
 |---|---|---|
-| `APPS_PAT` | Repository | Clone private ipstc + ipstc-hrms during build |
+| `DB_PASSWORD` | `strongpassword` | MariaDB root and site DB password |
+| `FRAPPE_SITE_NAME_HEADER` | `dev.example.com` | Site name Frappe resolves requests against |
+| `CUSTOM_IMAGE` | `ghcr.io/tivok-solutions/frappe_docker` | Image name pulled from GHCR |
+| `CUSTOM_TAG` | `develop` | Image tag — branch name or commit SHA |
+
+`CUSTOM_IMAGE` and `CUSTOM_TAG` are set manually before the first deploy and
+updated each time you pull a new build.
+
+#### 3. Compose files
+- **Path**: `/opt/frappe-docker/`
+- **Cloned from**: `https://github.com/TIVOK-SOLUTIONS/frappe_docker.git`
+- **Files used at runtime**:
+
+| File | Purpose |
+|---|---|
+| `compose.yaml` | Core services (backend, frontend, websocket, workers, scheduler) |
+| `overrides/compose.mariadb.yaml` | MariaDB database |
+| `overrides/compose.redis.yaml` | Redis cache and queue |
