@@ -17,8 +17,8 @@ The image is pushed to **GitHub Container Registry (GHCR)** with two tags:
 
 | Tag | Example | Use |
 |---|---|---|
-| Branch name | `ghcr.io/org/repo:develop` | Always points to the latest build for that branch |
-| Commit SHA | `ghcr.io/org/repo:abc1234` | Immutable — pin a specific build |
+| Branch name | `ghcr.io/tivok-solutions/frappe_docker:develop` | Always points to the latest build for that branch |
+| Commit SHA | `ghcr.io/tivok-solutions/frappe_docker:abc1234` | Immutable — pin a specific build |
 
 Custom app branches follow the triggering branch automatically:
 
@@ -46,73 +46,59 @@ git push -u origin develop
 
 | Secret | Description |
 |---|---|
-| `APPS_PAT` | Fine-grained PAT for cloning the private custom apps. See [Creating APPS_PAT](#creating-apps_pat) below. |
+| `APPS_PAT` | Classic PAT for cloning the private custom apps. See [Creating APPS_PAT](#creating-apps_pat) below. |
 
 #### Creating `APPS_PAT`
 
-1. Go to **GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens**
+1. Go to **GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)**
 2. Click **Generate new token**
-3. Set **Resource owner** to `TIVOK-SOLUTIONS`
-4. Under **Repository access** select: `ipstc` and `ipstc-hrms`
-5. Under **Permissions → Repository permissions** set **Contents** to `Read-only`
-6. Copy the token and save it as the `APPS_PAT` repository secret
+3. Select the `repo` scope
+4. Copy the token and save it as the `APPS_PAT` repository secret
 
 > The PAT is injected into the Docker build via a BuildKit secret mount and is
 > never written into any image layer or visible in `docker history`.
+
+### 3. Make the GHCR package public (recommended)
+
+This avoids needing a pull token on every server.
+
+Go to `https://github.com/TIVOK-SOLUTIONS/frappe_docker/pkgs/container/frappe_docker`
+→ **Package settings** → **Change visibility** → **Public**
+
+If you keep it private, see [GHCR pull token](#1-ghcr-pull-token) below.
 
 ---
 
 ## Server setup (run once per server)
 
-```bash
-# Install Docker
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker $USER
-# Log out and back in so the group takes effect
-```
+Assumes Docker and Docker Compose are already installed.
 
 ```bash
-# Create the deploy directory
-sudo mkdir -p /opt/frappe-docker
-sudo chown $USER:$USER /opt/frappe-docker
+# Clone the repo
+git clone https://github.com/TIVOK-SOLUTIONS/frappe_docker.git /opt/frappe-docker
 cd /opt/frappe-docker
-git clone https://github.com/TIVOK-SOLUTIONS/frappe_docker.git .
 
 # Create .env from template
 cp example.env .env
 ```
 
-Edit `.env` and set at minimum:
+Edit `.env` and set:
 
 ```env
+CUSTOM_IMAGE=ghcr.io/tivok-solutions/frappe_docker
+CUSTOM_TAG=develop                # or main
+
 DB_PASSWORD=a-strong-password
-FRAPPE_SITE_NAME_HEADER=dev.example.com
+FRAPPE_SITE_NAME_HEADER=<server-ip>   # e.g. 192.168.1.100
+HTTP_PUBLISH_PORT=80
 ```
-
-### Authenticate with GHCR on the server
-
-The server needs a token to pull the image. Create a classic PAT with
-`read:packages` scope, then run:
-
-```bash
-echo "<your-pat>" | docker login ghcr.io -u <your-github-username> --password-stdin
-```
-
-Do this once — Docker stores the credentials in `~/.docker/config.json`.
 
 ---
 
 ## First-time site creation
 
-Start the stack and create the site once. Replace the image tag with the one
-produced by the first pipeline run.
-
 ```bash
 cd /opt/frappe-docker
-
-# Set the custom image in .env
-echo "CUSTOM_IMAGE=ghcr.io/tivok-solutions/frappe_docker" >> .env
-echo "CUSTOM_TAG=develop" >> .env   # or use a commit SHA for a pinned version
 
 # Start the stack
 docker compose \
@@ -121,16 +107,16 @@ docker compose \
   -f overrides/compose.redis.yaml \
   up -d
 
-# Create the site
-docker compose exec backend bench new-site dev.example.com \
-  --db-root-password <DB_ROOT_PASSWORD> \
+# Create the site (use the server IP as the site name)
+docker compose exec backend bench new-site <server-ip> \
+  --db-root-password <DB_PASSWORD> \
   --admin-password <ADMIN_PASSWORD>
 
 # Install apps in order
-docker compose exec backend bench --site dev.example.com install-app erpnext
-docker compose exec backend bench --site dev.example.com install-app hrms
-docker compose exec backend bench --site dev.example.com install-app ipstc
-docker compose exec backend bench --site dev.example.com install-app ipstc_hrms
+docker compose exec backend bench --site <server-ip> install-app erpnext
+docker compose exec backend bench --site <server-ip> install-app hrms
+docker compose exec backend bench --site <server-ip> install-app ipstc
+docker compose exec backend bench --site <server-ip> install-app ipstc_hrms
 ```
 
 This is a one-time step. Subsequent updates only need a pull.
@@ -151,17 +137,11 @@ docker compose pull
 docker compose up -d --remove-orphans
 
 # Run any pending migrations
-docker compose exec backend bench --site dev.example.com migrate
+docker compose exec backend bench --site <server-ip> migrate
 ```
 
-To deploy a specific commit instead of the latest:
-
-```bash
-# Edit .env and set CUSTOM_TAG to the commit SHA shown in the Actions run
-CUSTOM_TAG=abc1234def docker compose pull
-docker compose up -d --remove-orphans
-docker compose exec backend bench --site dev.example.com migrate
-```
+To deploy a specific commit instead of the latest, set `CUSTOM_TAG` in `.env`
+to the commit SHA shown in the Actions run, then repeat the steps above.
 
 ---
 
@@ -190,7 +170,7 @@ Set at **Settings → Secrets and variables → Actions**
 
 | Secret | Type | Permissions needed | Purpose |
 |---|---|---|---|
-| `APPS_PAT` | Fine-grained PAT | `TIVOK-SOLUTIONS/ipstc` + `ipstc-hrms` → Contents: Read-only | Clones private app repos during the Docker build. Injected via BuildKit secret — never baked into the image. |
+| `APPS_PAT` | Classic PAT | `repo` scope | Clones private app repos during the Docker build. Injected via BuildKit secret — never baked into the image. |
 
 ---
 
@@ -198,7 +178,7 @@ Set at **Settings → Secrets and variables → Actions**
 Configured directly on each server — not stored in GitHub.
 
 #### 1. GHCR pull token
-Allows the server to pull the built image from GHCR.
+Only needed if the GHCR package is **private**.
 
 - **Type**: Classic PAT, `read:packages` scope
 - **Stored at**: `~/.docker/config.json` (written automatically by `docker login`)
@@ -218,13 +198,11 @@ Required variables:
 
 | Variable | Example | Description |
 |---|---|---|
-| `DB_PASSWORD` | `strongpassword` | MariaDB root and site DB password |
-| `FRAPPE_SITE_NAME_HEADER` | `dev.example.com` | Site name Frappe resolves requests against |
 | `CUSTOM_IMAGE` | `ghcr.io/tivok-solutions/frappe_docker` | Image name pulled from GHCR |
 | `CUSTOM_TAG` | `develop` | Image tag — branch name or commit SHA |
-
-`CUSTOM_IMAGE` and `CUSTOM_TAG` are set manually before the first deploy and
-updated each time you pull a new build.
+| `DB_PASSWORD` | `strongpassword` | MariaDB root and site DB password |
+| `FRAPPE_SITE_NAME_HEADER` | `192.168.1.100` | Server IP — used as the site name |
+| `HTTP_PUBLISH_PORT` | `80` | Port the site is served on |
 
 #### 3. Compose files
 - **Path**: `/opt/frappe-docker/`
