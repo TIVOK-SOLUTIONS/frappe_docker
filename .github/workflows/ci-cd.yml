@@ -30,8 +30,104 @@ env:
 # ─────────────────────────────────────────────────────────────────────────────
 
 jobs:
+  tests:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+    services:
+      redis-cache:
+        image: redis:alpine
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:alpine
+        ports:
+          - 11000:6379
+      mariadb:
+        image: mariadb:10.6
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: --health-cmd="mariadb-admin ping" --health-interval=5s --health-timeout=2s --health-retries=3
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          check-latest: true
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/*requirements.txt', '**/pyproject.toml', '**/setup.py', '**/setup.cfg') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+            ${{ runner.os }}-
+
+      - name: Get yarn cache directory path
+        id: yarn-cache-dir-path
+        run: echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT
+
+      - uses: actions/cache@v4
+        id: yarn-cache
+        with:
+          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+
+      - name: Install MariaDB client
+        run: sudo apt-get install -y mariadb-client
+
+      - name: Setup bench
+        run: |
+          pip install frappe-bench
+          bench init --skip-redis-config-generation --skip-assets \
+            --python "$(which python)" --frappe-branch version-16 ~/frappe-bench
+          mariadb --host 127.0.0.1 --port 3306 -u root -proot \
+            -e "SET GLOBAL character_set_server = 'utf8mb4'"
+          mariadb --host 127.0.0.1 --port 3306 -u root -proot \
+            -e "SET GLOBAL collation_server = 'utf8mb4_unicode_ci'"
+
+      - name: Install apps
+        working-directory: /home/runner/frappe-bench
+        env:
+          APPS_PAT: ${{ secrets.APPS_PAT }}
+          CUSTOM_BRANCH: ${{ github.ref_name == 'develop' && 'develop' || 'main' }}
+          CI: 'Yes'
+        run: |
+          bench get-app erpnext --branch version-16
+          bench get-app hrms https://github.com/frappe/hrms --branch version-16
+          bench get-app ipstc \
+            https://${APPS_PAT}@github.com/TIVOK-SOLUTIONS/ipstc \
+            --branch ${CUSTOM_BRANCH}
+          bench get-app ipstc_hrms \
+            https://${APPS_PAT}@github.com/TIVOK-SOLUTIONS/ipstc-hrms \
+            --branch ${CUSTOM_BRANCH}
+          bench setup requirements
+          bench new-site --db-root-password root --admin-password admin test_site
+          bench --site test_site install-app erpnext
+          bench --site test_site install-app hrms
+          bench --site test_site install-app ipstc
+          bench --site test_site install-app ipstc_hrms
+
+      - name: Run Tests
+        working-directory: /home/runner/frappe-bench
+        env:
+          TYPE: server
+        run: |
+          bench --site test_site set-config allow_tests true
+          bench --site test_site run-tests --app ipstc_hrms
+
   build-and-push:
     name: Build & Push
+    needs: tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
