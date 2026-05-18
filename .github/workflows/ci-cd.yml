@@ -3,7 +3,7 @@ name: Build & Push
 on:
   push:
     branches: [main, develop]
-#  workflow_dispatch:
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -156,5 +156,5 @@ jobs:
               -f overrides/compose.redis.yaml \
               -f overrides/compose.noproxy.yaml \
               up -d --remove-orphans
-            until docker compose exec -T db mariadb-admin ping -h localhost --silent; do sleep 2; done
+            sleep 30
             docker compose exec -T backend bench --site ${{ secrets.SITE_NAME }} migrate
