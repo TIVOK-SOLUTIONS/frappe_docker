@@ -58,6 +58,7 @@ jobs:
           REGISTRY: ${{ env.REGISTRY }}
 
       - name: Generate apps.json
+        id: apps
         env:
           APPS_PAT: ${{ secrets.APPS_PAT }}
         run: |
@@ -78,7 +79,9 @@ jobs:
           ]
           EOF
 
-          echo "apps.json written (custom apps on branch: ${CUSTOM_BRANCH})"
+          HASH=$(sha256sum /tmp/apps.json | cut -d' ' -f1)
+          echo "hash=${HASH}" >> "$GITHUB_OUTPUT"
+          echo "apps.json written (branch: ${CUSTOM_BRANCH}, hash: ${HASH})"
           echo "size: $(wc -c < /tmp/apps.json) bytes"
 
       - name: Build and push
@@ -93,7 +96,7 @@ jobs:
           build-args: |
             FRAPPE_BRANCH=version-16
             FRAPPE_PATH=https://github.com/frappe/frappe
-            CACHE_BUST=${{ github.ref_name }}-${{ hashFiles('apps.json') }}
+            CACHE_BUST=${{ steps.apps.outputs.hash }}
           secret-files: |
             apps_json=/tmp/apps.json
           cache-from: type=gha
