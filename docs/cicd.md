@@ -152,18 +152,54 @@ No SSH access needed after the first-time setup.
 
 ---
 
-## Triggering a build
+## Adding a new app
 
-### Automatic
+**1. Update `ci-cd.yml` — add to apps.json generation**
+
+In the `Generate apps.json` step, add a new entry:
+```json
+{"url": "${PREFIX}/your-app.git", "branch": "${CUSTOM_BRANCH}"}
+```
+
+**2. Update `ci-cd.yml` — add to smoke test**
+
+In the `smoke-test` job, find this line and add the new app name:
+```bash
+for app in frappe erpnext hrms ipstc ipstc_hrms your_app; do
+```
+
+**3. Commit and push** — CI will build a new image with the app included.
+
+**4. Install on each server (manual, one-time)**
 
 ```bash
-git push origin develop   # builds image with ipstc@develop, deploys to dev
-git push origin main      # builds image with ipstc@main, deploys to staging
+docker compose exec backend bench --site <site-name> install-app your_app
+```
+
+> App folder name (used in `install-app`) may differ from the repo name.
+> Check the app's `hooks.py` or `pyproject.toml` for the correct app name.
+
+---
+
+## Triggering a deployment
+
+### Automatic (recommended)
+
+Push to the branch — CI builds the image, runs tests, and deploys automatically:
+
+```bash
+git push origin develop   # builds image with ipstc@develop, deploys to dev server
+git push origin main      # builds image with ipstc@main, deploys to staging server
 ```
 
 ### Manual
 
-Go to **Actions → Build & Push → Run workflow** and pick the branch.
+1. Go to the repository on GitHub
+2. Click **Actions** tab
+3. Click **Build & Push** in the left sidebar
+4. Click **Run workflow** (top right)
+5. Select the branch (`develop` for dev, `main` for staging)
+6. Click the green **Run workflow** button
 
 Use this after committing directly to `ipstc` or `ipstc_hrms` — the build
 pulls the latest commit on the matching branch at build time.
