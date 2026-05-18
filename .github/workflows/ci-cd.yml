@@ -94,8 +94,8 @@ jobs:
             FRAPPE_BRANCH=version-16
             FRAPPE_PATH=https://github.com/frappe/frappe
             CACHE_BUST=${{ github.ref_name }}-${{ hashFiles('apps.json') }}
-          secrets: |
-            id=apps_json,src=/tmp/apps.json
+          secret-files: |
+            apps_json=/tmp/apps.json
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
