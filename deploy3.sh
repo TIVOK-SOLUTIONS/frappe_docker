@@ -102,3 +102,8 @@ for APP in hrms ipstc ipstc_procurement ipstc_hrms; do
 done
 
 ok "Done! Visit https://${SITE_DOMAIN}"
+
+
+bench --site erp.tivoksolutions.com install-app ipstc
+
+bench --site erp.tivoksolutions.com execute ipstc.setup.after_install.setup

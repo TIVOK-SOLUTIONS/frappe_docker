@@ -1,0 +1,71 @@
+name: Deploy IPSTC Dev
+
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to development server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEV_SERVER_HOST }}
+          username: ${{ secrets.DEV_SERVER_USER }}
+          key: ${{ secrets.DEV_SERVER_SSH_KEY }}
+          port: ${{ secrets.DEV_SERVER_PORT || 22 }}
+          script: |
+            set -e
+
+            cd ~/dev/frappe_docker
+
+            echo "Pull latest code"
+            git fetch origin develop
+            git reset --hard origin/develop
+
+            echo "Pull latest images"
+            docker compose \
+              --env-file .env \
+              -f compose.yaml \
+              -f overrides/compose.ipstc.yaml \
+              pull
+
+            echo "Start containers"
+            docker compose \
+              --env-file .env \
+              -f compose.yaml \
+              -f overrides/compose.ipstc.yaml \
+              up -d
+
+            echo "Run migrations"
+            docker compose \
+              --env-file .env \
+              -f compose.yaml \
+              -f overrides/compose.ipstc.yaml \
+              exec -T backend bench --site erp.tivoksolutions.com migrate
+
+            echo "Build assets"
+            docker compose \
+              --env-file .env \
+              -f compose.yaml \
+              -f overrides/compose.ipstc.yaml \
+              exec -T backend bench build
+
+            echo "Clear cache"
+            docker compose \
+              --env-file .env \
+              -f compose.yaml \
+              -f overrides/compose.ipstc.yaml \
+              exec -T backend bench --site erp.tivoksolutions.com clear-cache
+
+            echo "Restart services"
+            docker compose \
+              --env-file .env \
+              -f compose.yaml \
+              -f overrides/compose.ipstc.yaml \
+              restart backend frontend scheduler queue-short queue-default queue-long websocket
+
+            echo "Deployment complete"
