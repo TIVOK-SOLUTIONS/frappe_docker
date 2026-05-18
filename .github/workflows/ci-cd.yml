@@ -1,0 +1,137 @@
+name: Build & Push
+
+on:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+# ─── Required GitHub secrets ────────────────────────────────────────────────
+#
+# Repository-level (Settings → Secrets → Actions):
+#
+#   APPS_PAT   Fine-grained PAT for cloning ipstc and ipstc-hrms.
+#              Required only when those repos are private.
+#              Create at: GitHub → Settings → Developer settings →
+#                         Personal access tokens → Fine-grained
+#              Resource owner : TIVOK-SOLUTIONS
+#              Repository access: ipstc + ipstc-hrms
+#              Permissions: Contents → Read-only
+#
+#              Branch mapping is automatic:
+#                develop branch  →  ipstc@develop  + ipstc_hrms@develop
+#                main branch     →  ipstc@main     + ipstc_hrms@main
+#
+#              The PAT is injected via BuildKit secret mount — never baked
+#              into any image layer or visible in docker history.
+# ─────────────────────────────────────────────────────────────────────────────
+
+jobs:
+  build-and-push:
+    name: Build & Push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve lowercase image name
+        id: image
+        run: echo "name=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+        env:
+          REGISTRY: ${{ env.REGISTRY }}
+
+      - name: Generate apps.json
+        env:
+          APPS_PAT: ${{ secrets.APPS_PAT }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+
+          ref = os.environ["REF_NAME"]
+          pat = os.environ.get("APPS_PAT", "")
+
+          custom_branch = "develop" if ref == "develop" else "main"
+
+          prefix = (
+              f"https://{pat}@github.com/TIVOK-SOLUTIONS"
+              if pat
+              else "https://github.com/TIVOK-SOLUTIONS"
+          )
+
+          apps = [
+              {"url": "https://github.com/frappe/erpnext",      "branch": "version-16"},
+              {"url": "https://github.com/frappe/hrms",          "branch": "version-16"},
+              {"url": f"{prefix}/ipstc.git",                     "branch": custom_branch},
+              {"url": f"{prefix}/ipstc-hrms.git",                "branch": custom_branch},
+          ]
+
+          with open("/tmp/apps.json", "w") as f:
+              json.dump(apps, f, indent=2)
+
+          print(f"Built apps.json: custom apps on branch '{custom_branch}'")
+          PY
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: images/custom/Containerfile
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ github.ref_name }}
+            ${{ steps.image.outputs.name }}:${{ github.sha }}
+          build-args: |
+            FRAPPE_BRANCH=version-16
+            FRAPPE_PATH=https://github.com/frappe/frappe
+          secrets: |
+            id=apps_json,src=/tmp/apps.json
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  smoke-test:
+    name: Smoke Test
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify all apps are installed
+        run: |
+          IMAGE="${{ needs.build-and-push.outputs.image }}:${{ github.sha }}"
+          docker pull "$IMAGE"
+          docker run --rm --entrypoint bash "$IMAGE" -lc '
+            for app in frappe erpnext hrms ipstc ipstc_hrms; do
+              dir="/home/frappe/frappe-bench/apps/$app"
+              if [ -d "$dir" ]; then
+                echo "OK  $app"
+              else
+                echo "MISSING  $app" >&2
+                exit 1
+              fi
+            done
+          '
