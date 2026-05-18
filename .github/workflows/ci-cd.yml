@@ -157,5 +157,7 @@ jobs:
               -f overrides/compose.noproxy.yaml \
               up -d --remove-orphans
             sleep 30
+            docker compose stop queue-short queue-long scheduler
             docker compose exec -T backend bench --site ${{ secrets.SITE_NAME }} clear-cache
             docker compose exec -T backend bench --site ${{ secrets.SITE_NAME }} migrate
+            docker compose start queue-short queue-long scheduler
