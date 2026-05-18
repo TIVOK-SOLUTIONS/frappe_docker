@@ -13,20 +13,22 @@ env:
 #
 # Repository-level (Settings → Secrets → Actions):
 #
-#   APPS_PAT   Fine-grained PAT for cloning ipstc and ipstc-hrms.
-#              Required only when those repos are private.
-#              Create at: GitHub → Settings → Developer settings →
-#                         Personal access tokens → Fine-grained
-#              Resource owner : TIVOK-SOLUTIONS
-#              Repository access: ipstc + ipstc-hrms
-#              Permissions: Contents → Read-only
-#
+#   APPS_PAT   Classic PAT (repo scope) for cloning ipstc and ipstc-hrms.
 #              Branch mapping is automatic:
 #                develop branch  →  ipstc@develop  + ipstc_hrms@develop
 #                main branch     →  ipstc@main     + ipstc_hrms@main
+#              Injected via BuildKit secret — never baked into the image.
 #
-#              The PAT is injected via BuildKit secret mount — never baked
-#              into any image layer or visible in docker history.
+# Environment secrets (Settings → Environments → dev / staging):
+#
+#   SSH_HOST     Server IP or hostname
+#   SSH_USER     SSH login user (e.g. root)
+#   SSH_KEY      Private SSH key for the server
+#   DEPLOY_PATH  Path to frappe-docker on the server (e.g. /opt/frappe-docker)
+#   SITE_NAME    Frappe site name (e.g. 167.99.231.229)
+#
+#              develop branch  →  dev environment
+#              main branch     →  staging environment
 # ─────────────────────────────────────────────────────────────────────────────
 
 jobs:
@@ -132,3 +134,26 @@ jobs:
               fi
             done
           '
+
+  deploy:
+    name: Deploy
+    needs: smoke-test
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'develop' && 'dev' || 'staging' }}
+    steps:
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            cd ${{ secrets.DEPLOY_PATH }}
+            docker compose pull
+            docker compose \
+              -f compose.yaml \
+              -f overrides/compose.mariadb.yaml \
+              -f overrides/compose.redis.yaml \
+              -f overrides/compose.noproxy.yaml \
+              up -d --remove-orphans
+            docker compose exec -T backend bench --site ${{ secrets.SITE_NAME }} migrate

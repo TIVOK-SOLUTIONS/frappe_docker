@@ -9,9 +9,12 @@ custom Frappe v16 image containing **erpnext**, **hrms**, **ipstc**, and
 ## How it works
 
 ```
-push to develop  ──►  Build image  ──►  Smoke test  ──►  Image ready on GHCR
-push to main     ──►  Build image  ──►  Smoke test  ──►  Image ready on GHCR
+push to develop  ──►  Build image  ──►  Smoke test  ──►  Auto-deploy to dev server
+push to main     ──►  Build image  ──►  Smoke test  ──►  Auto-deploy to staging server
 ```
+
+**First deploy on each server is always manual** (create site, install apps — done once).
+Every push after that is fully automatic — new image built, deployed, and migrated.
 
 The image is pushed to **GitHub Container Registry (GHCR)** with two tags:
 
@@ -20,18 +23,18 @@ The image is pushed to **GitHub Container Registry (GHCR)** with two tags:
 | Branch name | `ghcr.io/tivok-solutions/frappe_docker:develop` | Always points to the latest build for that branch |
 | Commit SHA | `ghcr.io/tivok-solutions/frappe_docker:abc1234` | Immutable — pin a specific build |
 
-Custom app branches follow the triggering branch automatically:
+Branch mapping:
 
-| Trigger branch | ipstc branch | ipstc_hrms branch |
+| Branch | Environment | Server |
 |---|---|---|
-| `develop` | `develop` | `develop` |
-| `main` | `main` | `main` |
-
-Once the pipeline finishes, **you pull the image on the server manually.**
+| `develop` | dev | dev server |
+| `main` | staging | staging server |
+| `develop` | ipstc/ipstc_hrms branch | `develop` |
+| `main` | ipstc/ipstc_hrms branch | `main` |
 
 ---
 
-## One-time setup
+## One-time GitHub setup
 
 ### 1. Create the `develop` branch
 
@@ -40,32 +43,42 @@ git checkout -b develop
 git push -u origin develop
 ```
 
-### 2. Add GitHub Secrets
+### 2. Repository secret — `APPS_PAT`
 
-**Settings → Secrets and variables → Actions → New repository secret**
+Set at **Settings → Secrets and variables → Actions → New repository secret**
 
 | Secret | Description |
 |---|---|
-| `APPS_PAT` | Classic PAT for cloning the private custom apps. See [Creating APPS_PAT](#creating-apps_pat) below. |
+| `APPS_PAT` | Classic PAT (`repo` scope) for cloning ipstc and ipstc-hrms during the Docker build |
 
-#### Creating `APPS_PAT`
-
+**Creating `APPS_PAT`:**
 1. Go to **GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)**
-2. Click **Generate new token**
-3. Select the `repo` scope
-4. Copy the token and save it as the `APPS_PAT` repository secret
+2. Generate new token → select `repo` scope
+3. Save as the `APPS_PAT` repository secret
 
-> The PAT is injected into the Docker build via a BuildKit secret mount and is
-> never written into any image layer or visible in `docker history`.
+> Injected via BuildKit secret mount — never written into any image layer or visible in `docker history`.
 
-### 3. Make the GHCR package public (recommended)
+### 3. Environment secrets — dev and staging
 
-This avoids needing a pull token on every server.
+Set at **Settings → Environments** — create two environments: `dev` and `staging`.
+Add these secrets to **each** environment:
+
+| Secret | Example | Description |
+|---|---|---|
+| `SSH_HOST` | `167.99.231.229` | Server IP or hostname |
+| `SSH_USER` | `root` | SSH login user |
+| `SSH_KEY` | `-----BEGIN OPENSSH...` | Private SSH key for the server |
+| `DEPLOY_PATH` | `/opt/frappe-docker` | Path to frappe-docker on the server |
+| `SITE_NAME` | `167.99.231.229` | Frappe site name (used for migrations) |
+
+### 4. Make the GHCR package public (recommended)
+
+Avoids needing a pull token on every server.
 
 Go to `https://github.com/TIVOK-SOLUTIONS/frappe_docker/pkgs/container/frappe_docker`
 → **Package settings** → **Change visibility** → **Public**
 
-If you keep it private, see [GHCR pull token](#1-ghcr-pull-token) below.
+If kept private, each server must authenticate — see [GHCR pull token](#1-ghcr-pull-token) below.
 
 ---
 
@@ -86,16 +99,16 @@ Edit `.env` and set:
 
 ```env
 CUSTOM_IMAGE=ghcr.io/tivok-solutions/frappe_docker
-CUSTOM_TAG=develop                # or main
+CUSTOM_TAG=develop                # or main for staging
 
 DB_PASSWORD=a-strong-password
-FRAPPE_SITE_NAME_HEADER=<server-ip>   # e.g. 192.168.1.100
+FRAPPE_SITE_NAME_HEADER=<server-ip>
 HTTP_PUBLISH_PORT=80
 ```
 
 ---
 
-## First-time site creation
+## First-time site creation (manual, done once)
 
 ```bash
 cd /opt/frappe-docker
@@ -105,6 +118,7 @@ docker compose \
   -f compose.yaml \
   -f overrides/compose.mariadb.yaml \
   -f overrides/compose.redis.yaml \
+  -f overrides/compose.noproxy.yaml \
   up -d
 
 # Create the site (use the server IP as the site name)
@@ -117,31 +131,24 @@ docker compose exec backend bench --site <server-ip> install-app erpnext
 docker compose exec backend bench --site <server-ip> install-app hrms
 docker compose exec backend bench --site <server-ip> install-app ipstc
 docker compose exec backend bench --site <server-ip> install-app ipstc_hrms
+
+# Restart frontend to pick up the new site
+docker compose restart frontend
 ```
 
-This is a one-time step. Subsequent updates only need a pull.
+After this, every push to `develop` or `main` deploys automatically — no manual steps needed.
 
 ---
 
-## Deploying an update
+## Automatic deployment (every push)
 
-After the CI pipeline completes:
+The pipeline runs these steps on the server automatically after a successful build and smoke test:
 
-```bash
-cd /opt/frappe-docker
+1. `docker compose pull` — pulls the new image
+2. `docker compose up -d --remove-orphans` — restarts containers with the new image
+3. `bench --site all migrate` — applies any pending DB migrations on all sites
 
-# Pull the new image (branch tag always points to latest)
-docker compose pull
-
-# Restart with the new image
-docker compose up -d --remove-orphans
-
-# Run any pending migrations
-docker compose exec backend bench --site <server-ip> migrate
-```
-
-To deploy a specific commit instead of the latest, set `CUSTOM_TAG` in `.env`
-to the commit SHA shown in the Actions run, then repeat the steps above.
+No SSH access needed after the first-time setup.
 
 ---
 
@@ -150,67 +157,68 @@ to the commit SHA shown in the Actions run, then repeat the steps above.
 ### Automatic
 
 ```bash
-git push origin develop   # builds image with ipstc@develop
-git push origin main      # builds image with ipstc@main
+git push origin develop   # builds image with ipstc@develop, deploys to dev
+git push origin main      # builds image with ipstc@main, deploys to staging
 ```
 
 ### Manual
 
 Go to **Actions → Build & Push → Run workflow** and pick the branch.
 
-Use this after committing to `ipstc` or `ipstc_hrms` directly — the build
+Use this after committing directly to `ipstc` or `ipstc_hrms` — the build
 pulls the latest commit on the matching branch at build time.
 
 ---
 
 ## Secrets & credentials summary
 
-### GitHub Actions secret
-Set at **Settings → Secrets and variables → Actions**
+### GitHub repository secret
 
-| Secret | Type | Permissions needed | Purpose |
+| Secret | Type | Scope | Purpose |
 |---|---|---|---|
-| `APPS_PAT` | Classic PAT | `repo` scope | Clones private app repos during the Docker build. Injected via BuildKit secret — never baked into the image. |
+| `APPS_PAT` | Classic PAT | `repo` | Clones private app repos during Docker build |
 
----
+### GitHub environment secrets (dev + staging)
+
+| Secret | Purpose |
+|---|---|
+| `SSH_HOST` | Server to deploy to |
+| `SSH_USER` | SSH login user |
+| `SSH_KEY` | Private key for SSH access |
+| `DEPLOY_PATH` | frappe-docker directory on the server |
+| `SITE_NAME` | Frappe site name for migrations |
 
 ### Server credentials
-Configured directly on each server — not stored in GitHub.
 
 #### 1. GHCR pull token
 Only needed if the GHCR package is **private**.
 
 - **Type**: Classic PAT, `read:packages` scope
-- **Stored at**: `~/.docker/config.json` (written automatically by `docker login`)
-- **How to create**:
-  1. Go to **GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)**
-  2. Select only the `read:packages` scope
-  3. Run on each server:
+- **Stored at**: `~/.docker/config.json`
+- **Setup**:
   ```bash
-  echo "<token>" | docker login ghcr.io -u <your-github-username> --password-stdin
+  echo "<token>" | docker login ghcr.io -u <github-username> --password-stdin
   ```
 
 #### 2. `.env` file
 - **Path**: `/opt/frappe-docker/.env`
 - **Created from**: `cp example.env .env`
 
-Required variables:
-
 | Variable | Example | Description |
 |---|---|---|
 | `CUSTOM_IMAGE` | `ghcr.io/tivok-solutions/frappe_docker` | Image name pulled from GHCR |
 | `CUSTOM_TAG` | `develop` | Image tag — branch name or commit SHA |
 | `DB_PASSWORD` | `strongpassword` | MariaDB root and site DB password |
-| `FRAPPE_SITE_NAME_HEADER` | `192.168.1.100` | Server IP — used as the site name |
+| `FRAPPE_SITE_NAME_HEADER` | `167.99.231.229` | Server IP — used as the site name |
 | `HTTP_PUBLISH_PORT` | `80` | Port the site is served on |
 
 #### 3. Compose files
 - **Path**: `/opt/frappe-docker/`
 - **Cloned from**: `https://github.com/TIVOK-SOLUTIONS/frappe_docker.git`
-- **Files used at runtime**:
 
 | File | Purpose |
 |---|---|
 | `compose.yaml` | Core services (backend, frontend, websocket, workers, scheduler) |
 | `overrides/compose.mariadb.yaml` | MariaDB database |
 | `overrides/compose.redis.yaml` | Redis cache and queue |
+| `overrides/compose.noproxy.yaml` | Exposes port 80 directly (no Traefik) |
