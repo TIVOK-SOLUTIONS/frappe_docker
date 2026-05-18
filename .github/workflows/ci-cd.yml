@@ -3,7 +3,7 @@ name: Build & Push
 on:
   push:
     branches: [main, develop]
-  workflow_dispatch:
+#  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
