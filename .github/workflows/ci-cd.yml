@@ -69,8 +69,10 @@ jobs:
 
           if [ -n "$APPS_PAT" ]; then
             PREFIX="https://${APPS_PAT}@github.com/TIVOK-SOLUTIONS"
+            AUTH_HEADER="Authorization: token ${APPS_PAT}"
           else
             PREFIX="https://github.com/TIVOK-SOLUTIONS"
+            AUTH_HEADER=""
           fi
 
           cat > /tmp/apps.json <<EOF
@@ -82,10 +84,20 @@ jobs:
           ]
           EOF
 
-          HASH=$(sha256sum /tmp/apps.json | cut -d' ' -f1)
+          # Fetch latest commit SHAs from custom app repos to bust cache when they change
+          IPSTC_SHA=$(curl -fsSL -H "${AUTH_HEADER}" \
+            "https://api.github.com/repos/TIVOK-SOLUTIONS/ipstc/commits/${CUSTOM_BRANCH}" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'])")
+          IPSTC_HRMS_SHA=$(curl -fsSL -H "${AUTH_HEADER}" \
+            "https://api.github.com/repos/TIVOK-SOLUTIONS/ipstc-hrms/commits/${CUSTOM_BRANCH}" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'])")
+
+          HASH=$(echo "${IPSTC_SHA}${IPSTC_HRMS_SHA}" | sha256sum | cut -d' ' -f1)
           echo "hash=${HASH}" >> "$GITHUB_OUTPUT"
-          echo "apps.json written (branch: ${CUSTOM_BRANCH}, hash: ${HASH})"
-          echo "size: $(wc -c < /tmp/apps.json) bytes"
+          echo "apps.json written (branch: ${CUSTOM_BRANCH})"
+          echo "ipstc SHA: ${IPSTC_SHA}"
+          echo "ipstc-hrms SHA: ${IPSTC_HRMS_SHA}"
+          echo "cache bust hash: ${HASH}"
 
       - name: Build and push
         uses: docker/build-push-action@v5
