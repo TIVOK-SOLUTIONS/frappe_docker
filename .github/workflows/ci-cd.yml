@@ -1,0 +1,180 @@
+name: Build & Push
+
+on:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+# ─── Required GitHub secrets ────────────────────────────────────────────────
+#
+# Repository-level (Settings → Secrets → Actions):
+#
+#   APPS_PAT   Classic PAT (repo scope) for cloning ipstc and ipstc-hrms.
+#              Branch mapping is automatic:
+#                develop branch  →  ipstc@develop  + ipstc_hrms@develop
+#                main branch     →  ipstc@main     + ipstc_hrms@main
+#              Injected via BuildKit secret — never baked into the image.
+#
+# Environment secrets (Settings → Environments → dev / staging):
+#
+#   SSH_HOST     Server IP or hostname
+#   SSH_USER     SSH login user (e.g. root)
+#   SSH_KEY      Private SSH key for the server
+#   DEPLOY_PATH  Path to frappe-docker on the server (e.g. /opt/frappe-docker)
+#   SITE_NAME    Frappe site name (e.g. 167.99.231.229)
+#
+#              develop branch  →  dev environment
+#              main branch     →  staging environment
+# ─────────────────────────────────────────────────────────────────────────────
+
+jobs:
+  build-and-push:
+    name: Build & Push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve lowercase image name
+        id: image
+        run: echo "name=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+        env:
+          REGISTRY: ${{ env.REGISTRY }}
+
+      - name: Generate apps.json
+        id: apps
+        env:
+          APPS_PAT: ${{ secrets.APPS_PAT }}
+        run: |
+          CUSTOM_BRANCH=$([[ "${{ github.ref_name }}" == "develop" ]] && echo "develop" || echo "main")
+
+          if [ -n "$APPS_PAT" ]; then
+            PREFIX="https://${APPS_PAT}@github.com/TIVOK-SOLUTIONS"
+            AUTH_HEADER="Authorization: token ${APPS_PAT}"
+          else
+            PREFIX="https://github.com/TIVOK-SOLUTIONS"
+            AUTH_HEADER=""
+          fi
+
+          cat > /tmp/apps.json <<EOF
+          [
+            {"url": "https://github.com/frappe/erpnext",    "branch": "version-16"},
+            {"url": "https://github.com/frappe/hrms",        "branch": "version-16"},
+            {"url": "${PREFIX}/ipstc.git",                   "branch": "${CUSTOM_BRANCH}"},
+            {"url": "${PREFIX}/ipstc-hrms.git",              "branch": "${CUSTOM_BRANCH}"}
+          ]
+          EOF
+
+          # Fetch latest commit SHAs from custom app repos to bust cache when they change
+          IPSTC_SHA=$(curl -fsSL -H "${AUTH_HEADER}" \
+            "https://api.github.com/repos/TIVOK-SOLUTIONS/ipstc/commits/${CUSTOM_BRANCH}" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'])")
+          IPSTC_HRMS_SHA=$(curl -fsSL -H "${AUTH_HEADER}" \
+            "https://api.github.com/repos/TIVOK-SOLUTIONS/ipstc-hrms/commits/${CUSTOM_BRANCH}" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'])")
+
+          HASH=$(echo "${IPSTC_SHA}${IPSTC_HRMS_SHA}" | sha256sum | cut -d' ' -f1)
+          echo "hash=${HASH}" >> "$GITHUB_OUTPUT"
+          echo "apps.json written (branch: ${CUSTOM_BRANCH})"
+          echo "ipstc SHA: ${IPSTC_SHA}"
+          echo "ipstc-hrms SHA: ${IPSTC_HRMS_SHA}"
+          echo "cache bust hash: ${HASH}"
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: images/custom/Containerfile
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ github.ref_name }}
+            ${{ steps.image.outputs.name }}:${{ github.sha }}
+          build-args: |
+            FRAPPE_BRANCH=version-16
+            FRAPPE_PATH=https://github.com/frappe/frappe
+            CACHE_BUST=${{ steps.apps.outputs.hash }}
+          secret-files: |
+            apps_json=/tmp/apps.json
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  smoke-test:
+    name: Smoke Test
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify all apps are installed
+        run: |
+          IMAGE="${{ needs.build-and-push.outputs.image }}:${{ github.sha }}"
+          docker pull "$IMAGE"
+          docker run --rm --entrypoint bash "$IMAGE" -lc '
+            for app in frappe erpnext hrms ipstc ipstc_hrms; do
+              dir="/home/frappe/frappe-bench/apps/$app"
+              if [ -d "$dir" ]; then
+                echo "OK  $app"
+              else
+                echo "MISSING  $app" >&2
+                exit 1
+              fi
+            done
+          '
+
+  deploy:
+    name: Deploy
+    needs: smoke-test
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'develop' && 'dev' || 'staging' }}
+    steps:
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            cd ${{ secrets.DEPLOY_PATH }}
+            docker compose pull
+            if [ "${{ github.ref_name }}" = "main" ]; then
+              PROXY_OVERRIDE="-f overrides/compose.https.yaml"
+            else
+              PROXY_OVERRIDE="-f overrides/compose.noproxy.yaml"
+            fi
+            docker compose \
+              -f compose.yaml \
+              -f overrides/compose.mariadb.yaml \
+              -f overrides/compose.redis.yaml \
+              ${PROXY_OVERRIDE} \
+              up -d --remove-orphans
+            sleep 30
+            docker compose stop queue-short queue-long scheduler
+            docker compose exec -T backend bench --site ${{ secrets.SITE_NAME }} clear-cache
+            docker compose exec -T backend bench --site ${{ secrets.SITE_NAME }} migrate
+            docker compose start queue-short queue-long scheduler
