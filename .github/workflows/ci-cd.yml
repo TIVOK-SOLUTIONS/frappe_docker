@@ -150,11 +150,16 @@ jobs:
           script: |
             cd ${{ secrets.DEPLOY_PATH }}
             docker compose pull
+            if [ "${{ github.ref_name }}" = "main" ]; then
+              PROXY_OVERRIDE="-f overrides/compose.https.yaml"
+            else
+              PROXY_OVERRIDE="-f overrides/compose.noproxy.yaml"
+            fi
             docker compose \
               -f compose.yaml \
               -f overrides/compose.mariadb.yaml \
               -f overrides/compose.redis.yaml \
-              -f overrides/compose.noproxy.yaml \
+              ${PROXY_OVERRIDE} \
               up -d --remove-orphans
             sleep 30
             docker compose stop queue-short queue-long scheduler
