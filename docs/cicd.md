@@ -95,20 +95,40 @@ cd /opt/frappe-docker
 cp example.env .env
 ```
 
-Edit `.env` and set:
+### Dev server `.env`
 
 ```env
 CUSTOM_IMAGE=ghcr.io/tivok-solutions/frappe_docker
-CUSTOM_TAG=develop                # or main for staging
+CUSTOM_TAG=develop
 
 DB_PASSWORD=a-strong-password
 FRAPPE_SITE_NAME_HEADER=<server-ip>
 HTTP_PUBLISH_PORT=80
 ```
 
+### Staging server `.env`
+
+```env
+CUSTOM_IMAGE=ghcr.io/tivok-solutions/frappe_docker
+CUSTOM_TAG=main
+
+DB_PASSWORD=a-strong-password
+FRAPPE_SITE_NAME_HEADER=erp.tivoksolutions.com
+HTTP_PUBLISH_PORT=80
+HTTPS_PUBLISH_PORT=443
+LETSENCRYPT_EMAIL=your@email.com
+SITES_RULE=Host(`erp.tivoksolutions.com`)
+```
+
+> Before starting the staging stack, ensure:
+> - DNS A record for `erp.tivoksolutions.com` points to the staging server IP
+> - Ports **80** and **443** are open in the cloud firewall
+
 ---
 
 ## First-time site creation (manual, done once)
+
+### Dev server
 
 ```bash
 cd /opt/frappe-docker
@@ -136,6 +156,34 @@ docker compose exec backend bench --site <server-ip> install-app ipstc_hrms
 docker compose restart frontend
 ```
 
+### Staging server
+
+```bash
+cd /opt/frappe-docker
+
+# Start the stack (Traefik handles SSL automatically via Let's Encrypt)
+docker compose \
+  -f compose.yaml \
+  -f overrides/compose.mariadb.yaml \
+  -f overrides/compose.redis.yaml \
+  -f overrides/compose.https.yaml \
+  up -d
+
+# Create the site (use the domain as the site name)
+docker compose exec backend bench new-site erp.tivoksolutions.com \
+  --db-root-password <DB_PASSWORD> \
+  --admin-password <ADMIN_PASSWORD>
+
+# Install apps in order
+docker compose exec backend bench --site erp.tivoksolutions.com install-app erpnext
+docker compose exec backend bench --site erp.tivoksolutions.com install-app hrms
+docker compose exec backend bench --site erp.tivoksolutions.com install-app ipstc
+docker compose exec backend bench --site erp.tivoksolutions.com install-app ipstc_hrms
+
+# Restart frontend to pick up the new site
+docker compose restart frontend
+```
+
 After this, every push to `develop` or `main` deploys automatically — no manual steps needed.
 
 ---
@@ -146,7 +194,10 @@ The pipeline runs these steps on the server automatically after a successful bui
 
 1. `docker compose pull` — pulls the new image
 2. `docker compose up -d --remove-orphans` — restarts containers with the new image
-3. `bench --site all migrate` — applies any pending DB migrations on all sites
+3. Stops workers (queue-short, queue-long, scheduler) to prevent document lock conflicts during migration
+4. `bench clear-cache` — clears Redis cache and document locks
+5. `bench migrate` — applies any pending DB migrations for all installed apps in order (frappe → erpnext → hrms → ipstc → ipstc_hrms)
+6. Restarts workers
 
 No SSH access needed after the first-time setup.
 
