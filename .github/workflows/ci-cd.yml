@@ -197,7 +197,7 @@ jobs:
             $COMPOSE up -d --remove-orphans
 
             echo "Waiting for MariaDB to be ready..."
-            until $COMPOSE exec -T db mariadb -uroot -p"${DB_ROOT_PASSWORD:-123}" -e "SELECT 1" > /dev/null 2>&1; do
+            until $COMPOSE exec -T db mariadb -uroot -p"${DB_ROOT_PASSWORD:-tiv0k@solution}" -e "SELECT 1" > /dev/null 2>&1; do
               echo "MariaDB not ready, retrying in 5s..."
               sleep 5
             done
