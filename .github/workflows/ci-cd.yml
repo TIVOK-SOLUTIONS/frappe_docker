@@ -213,7 +213,7 @@ jobs:
               DB_NAME=$($COMPOSE exec -T backend python3 -c "import json; c=json.load(open('$SITE_CONFIG')); print(c['db_name'])")
               DB_USER=$($COMPOSE exec -T backend python3 -c "import json; c=json.load(open('$SITE_CONFIG')); print(c.get('db_user', c['db_name']))")
               DB_PASS=$($COMPOSE exec -T backend python3 -c "import json; c=json.load(open('$SITE_CONFIG')); print(c['db_password'])")
-              $COMPOSE exec -T db mariadb -uroot -p"${DB_ROOT_PASSWORD:-123}" -e "
+              $COMPOSE exec -T db mariadb -uroot -p"${DB_ROOT_PASSWORD:-tiv0k@solution}" -e "
                 CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASS}';
                 ALTER USER '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASS}';
                 GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'%';
