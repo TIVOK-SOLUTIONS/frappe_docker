@@ -185,8 +185,10 @@ jobs:
 
             if [ "${{ github.ref_name }}" = "main" ]; then
               PROXY_OVERRIDE="-f overrides/compose.https.yaml"
+              DB_ROOT_PASSWORD="tiv0k@solution"
             else
               PROXY_OVERRIDE="-f overrides/compose.noproxy.yaml"
+              DB_ROOT_PASSWORD="123"
             fi
 
             COMPOSE="docker compose \
