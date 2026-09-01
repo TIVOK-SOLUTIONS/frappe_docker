@@ -227,6 +227,16 @@ jobs:
             echo "Stopping workers..."
             $COMPOSE stop queue-short queue-long scheduler
 
+            # Clear stale document locks. A failed deploy can leave a Role
+            # Profile (or similar) locked after queue_action() enqueues a
+            # background job that never runs because the workers are stopped;
+            # the next migrate then dies in sync_fixtures with
+            # DocumentLockedError. The lock files are safe to remove while
+            # workers are down.
+            echo "Clearing stale document locks..."
+            $COMPOSE exec -T backend bash -lc \
+              'rm -rf sites/${{ secrets.SITE_NAME }}/locks/* 2>/dev/null' || true
+
             echo "Running migrations..."
             set +e
             $COMPOSE exec -T backend bench --site ${{ secrets.SITE_NAME }} migrate 2>&1 \
