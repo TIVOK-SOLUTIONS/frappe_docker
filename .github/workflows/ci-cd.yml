@@ -228,7 +228,19 @@ jobs:
             $COMPOSE stop queue-short queue-long scheduler
 
             echo "Running migrations..."
-            $COMPOSE exec -T backend bench --site ${{ secrets.SITE_NAME }} migrate
+            set +e
+            $COMPOSE exec -T backend bench --site ${{ secrets.SITE_NAME }} migrate 2>&1 \
+              | tr '\r' '\n' | tee /tmp/migrate.log
+            MIGRATE_RC=${PIPESTATUS[0]}
+            set -e
+            if [ "$MIGRATE_RC" -ne 0 ]; then
+              echo "::error::bench migrate failed (rc=${MIGRATE_RC}). Last 150 non-progress lines:"
+              grep -avE '\] +[0-9]+%$' /tmp/migrate.log | tail -n 150
+              echo "----- recent site error logs -----"
+              $COMPOSE exec -T backend bash -lc \
+                'tail -n 120 sites/${{ secrets.SITE_NAME }}/logs/*.log 2>/dev/null' || true
+              exit 1
+            fi
 
             echo "Clearing cache..."
             $COMPOSE exec -T backend bench --site ${{ secrets.SITE_NAME }} clear-cache
