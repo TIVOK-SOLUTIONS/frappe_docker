@@ -224,11 +224,37 @@ jobs:
               echo "DB user ensured: ${DB_USER}"
             fi
 
+            # Keep queue-long running during migrate. sync_fixtures imports
+            # Role Profile docs whose on_update calls
+            # queue_action("update_all_users", queue="long"), which locks the
+            # doc until that background job runs. If the same profile is
+            # imported again in the same migrate (multiple apps ship it) the
+            # second save hits the still-held lock and migrate dies with
+            # DocumentLockedError. Leaving queue-long up lets the job drain and
+            # release the lock between imports.
             echo "Stopping workers..."
-            $COMPOSE stop queue-short queue-long scheduler
+            $COMPOSE stop queue-short scheduler
+
+            # Clear any document locks left behind by a previously failed
+            # migrate so the first import this run starts clean.
+            echo "Clearing stale document locks..."
+            $COMPOSE exec -T backend bash -lc \
+              'rm -rf sites/${{ secrets.SITE_NAME }}/locks/* 2>/dev/null' || true
 
             echo "Running migrations..."
-            $COMPOSE exec -T backend bench --site ${{ secrets.SITE_NAME }} migrate
+            set +e
+            $COMPOSE exec -T backend bench --site ${{ secrets.SITE_NAME }} migrate 2>&1 \
+              | tr '\r' '\n' | tee /tmp/migrate.log
+            MIGRATE_RC=${PIPESTATUS[0]}
+            set -e
+            if [ "$MIGRATE_RC" -ne 0 ]; then
+              echo "::error::bench migrate failed (rc=${MIGRATE_RC}). Last 150 non-progress lines:"
+              grep -avE '\] +[0-9]+%$' /tmp/migrate.log | tail -n 150
+              echo "----- recent site error logs -----"
+              $COMPOSE exec -T backend bash -lc \
+                'tail -n 120 sites/${{ secrets.SITE_NAME }}/logs/*.log 2>/dev/null' || true
+              exit 1
+            fi
 
             echo "Clearing cache..."
             $COMPOSE exec -T backend bench --site ${{ secrets.SITE_NAME }} clear-cache
